@@ -29,11 +29,15 @@ Session Mode är FL Studios kontrollager. DAW-scriptet använder Launchpadens do
 - Record Arm på CC 1 växlar ett armeringsläge där armerade spår visas med palettfärg 6 och övriga med spårfärg.
 - Record Arm-läget kan låsas med ett kort tryck eller visas tillfälligt medan CC 1 hålls nedtryckt.
 - Mute på CC 2 och Solo på CC 3 använder samma låsta och tillfälliga lägesmodell; mutade pads visas med 45 och solo-pads med 13.
-- Volume på CC 4 använder åtta inbyggda DAW-faders, automatisk bank från valt spår och vänster/höger för bankbyte; Track Select används inte.
+- Volume på CC 4 använder åtta inbyggda DAW-faders, automatisk bank från valt spår och vänster/höger för bankbyte.
+- Volume visar endast faders för existerande Mixer tracks. Vald track är ljus lime 17, armed tracks ljust guld 61, muted tracks mörkgrå 1 och övriga tracks vita 3. Navigerbara pilar är tända; Track Select CC 101–108 visar tillgängliga åttagrupper mörkgrått 1 och aktuell grupp ljust lime 17.
 - Volume-vyn behåller befintliga transport-, mixer- och hårdvarulägesknappar samt deras LED-feedback direkt på DAW-porten.
 - Mixerlägesknapparna CC 1–4 släcks utanför Session, och byte från Volume till ett annat mixerläge bevarar mål-läget efter hårdvarans layoutbekräftelse.
 - Mixerlägesknapparna Record Arm, Mute, Solo och Volume släcks vid initiering och varje bekräftad hårdvarulayout utanför Session/Fader.
-- Track Select lämnas oanvänd; Mixer tracks väljs i 8×8-grundvyn.
+- Track Select används som gruppval och gruppindikering i Volume-vyn; Mixer tracks väljs i 8×8-grundvyn.
+- Track Select CC 101–108 släcks i alla andra vyer än Volume.
+- Setup-layouten behandlas som tillfällig; aktiv Session-mixervy bevaras och återställs när hårdvaran återgår.
+- Volume uppdaterar faderfärger via DAW-kanal 6; faderbanken definieras endast när vyn öppnas eller banken byts.
 - Övriga märkta funktioner får endast en FL-funktion när motsvarigheten är tillräckligt nära och säker.
 
 ## Funktionsprinciper

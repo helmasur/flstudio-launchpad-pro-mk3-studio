@@ -50,3 +50,8 @@
 - 2026-08-08: Beslutet om dubbelriktad MIDI/DAW-brygga ersätts; DAW-scriptet skall ensamt äga Session-kontroller och MIDI-scriptet skall endast lämna musikalisk MIDI vidare.
 - 2026-08-08: Track control-raden CC 1–8 skall endast vara tänd i Session-vyer; byte från Volume till Record Arm, Mute eller Solo skall bevara det valda mixerläget.
 - 2026-08-08: Record Arm, Mute, Solo och Volume på CC 1–4 skall alltid vara släckta utanför Session- och Fader-vyerna.
+- 2026-08-08: Volume skall endast visa faders för existerande Mixer tracks. Vänster/höger skall lysa när respektive bankbyte är möjligt, och aktuell Track Select-grupp skall vara ljus lime 17.
+- 2026-08-08: Vald Mixer track skall visas ljus lime 17 i Session-grundvyn. I Volume skall vald track vara 17, armed tracks ljust guld 61, muted tracks mörkgrå 1 och övriga tracks vita 3; vald status har högst färgprioritet, därefter muted och armed. Tillgängliga inaktiva Track Select-grupper skall vara mörkgrå 1.
+- 2026-08-08: Track Select CC 101–108 skall endast vara tända i Volume-vyn.
+- 2026-08-08: Ett tillfälligt besök i Launchpadens Setup-vy skall bevara aktiv Session-mixervy och återställa dess DAW-kontroller automatiskt vid återgång.
+- 2026-08-08: Löpande färgfeedback i Volume skall använda DAW-faderfärgkanalen utan att återdefiniera faderbanken under en fadergest.

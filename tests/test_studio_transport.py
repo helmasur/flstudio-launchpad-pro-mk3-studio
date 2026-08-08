@@ -82,7 +82,7 @@ def load_script():
     solo_tracks = set()
     track_volumes = {track: 0.5 for track in range(1, 126)}
     mixer = types.SimpleNamespace(
-        getTrackCount=lambda: 125,
+        getTrackCount=lambda: mixer.track_count,
         getTrackColor=lambda track: 0x102030 + track,
         setTrackNumber=lambda track: (mixer.selected.append(track), mixer_state.__setitem__("selected", track)),
         trackNumber=lambda: mixer_state["selected"],
@@ -96,6 +96,7 @@ def load_script():
         setTrackVolume=lambda track, value: track_volumes.__setitem__(track, value),
         track_volumes=track_volumes,
         selected=[],
+        track_count=125,
     )
     utils = types.SimpleNamespace(
         ColorToRGB=lambda color: ((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF),
@@ -148,6 +149,34 @@ class StudioTransportTests(unittest.TestCase):
         self.assertTrue(module.Controller.session_active)
         self.assertTrue(module.Controller.volume_active)
         self.assertIn(module.build_layout_sysex(module.LAYOUT_SESSION), sysex_messages)
+
+    def test_setup_round_trip_restores_volume_view(self):
+        module, _, _, sysex_messages, _ = load_script()
+        module.Controller.enter_session()
+        module.Controller.set_mixer_control_mode('volume')
+        sysex_messages.clear()
+
+        module.Controller.on_midi_in(
+            Event(
+                status=module.midi.MIDI_BEGINSYSEX,
+                sysex=module.build_layout_sysex(module.LAYOUT_SETTINGS),
+            )
+        )
+        self.assertTrue(module.Controller.session_active)
+        self.assertTrue(module.Controller.volume_active)
+
+        module.Controller.on_midi_in(
+            Event(
+                status=module.midi.MIDI_BEGINSYSEX,
+                sysex=module.build_layout_sysex(1),
+            )
+        )
+
+        self.assertTrue(module.Controller.session_active)
+        self.assertTrue(module.Controller.volume_active)
+        self.assertIn(module.SYSEX_DAW_MODE_ON, sysex_messages)
+        self.assertTrue(any(message[6] == 1 for message in sysex_messages))
+        self.assertNotIn(module.SYSEX_FADER_LAYOUT, sysex_messages)
 
     def test_leaving_volume_selects_named_hardware_layout(self):
         module, _, _, sysex_messages, midi_messages = load_script()
@@ -350,7 +379,7 @@ class StudioTransportTests(unittest.TestCase):
 
         self.assertTrue(event.handled)
         self.assertEqual(mixer.selected, [1, 64])
-        self.assertEqual(midi_messages[-1], (module.midi.MIDI_NOTEON, 0, 18, 3))
+        self.assertEqual(midi_messages[-1], (module.midi.MIDI_NOTEON, 0, 18, 17))
 
     def test_releasing_grid_pad_keeps_selected_color(self):
         module, _, _, sysex_messages, midi_messages = load_script()
@@ -365,7 +394,7 @@ class StudioTransportTests(unittest.TestCase):
         self.assertEqual(sysex_messages, [])
         self.assertEqual(midi_messages, [])
 
-    def test_selecting_new_track_restores_previous_pad_and_keeps_new_pad_white(self):
+    def test_selecting_new_track_restores_previous_pad_and_keeps_new_pad_lime(self):
         module, _, mixer, sysex_messages, midi_messages = load_script()
         module.Controller.enter_session()
         sysex_messages.clear()
@@ -378,7 +407,7 @@ class StudioTransportTests(unittest.TestCase):
             sysex_messages[-1],
             bytes([0xF0, 0x00, 0x20, 0x29, 0x02, 0x0E, 0x03, 3, 81, *expected_rgb, 0xF7]),
         )
-        self.assertEqual(midi_messages[-1], (module.midi.MIDI_NOTEON, 0, 82, 3))
+        self.assertEqual(midi_messages[-1], (module.midi.MIDI_NOTEON, 0, 82, 17))
 
     def test_record_arm_button_toggles_mode_and_led(self):
         module, _, _, _, messages = load_script()
@@ -490,6 +519,94 @@ class StudioTransportTests(unittest.TestCase):
         )
 
         self.assertEqual(module.Controller.volume_bank_start, 9)
+
+    def test_volume_view_only_lights_existing_faders_and_banks(self):
+        module, _, mixer, sysex_messages, midi_messages = load_script()
+        mixer.track_count = 10
+        mixer.setTrackNumber(10)
+        module.Controller.enter_session()
+        midi_messages.clear()
+        sysex_messages.clear()
+
+        module.Controller.set_mixer_control_mode('volume')
+
+        fader_setup = next(message for message in sysex_messages if message[6] == 1)
+        fader_colors = [fader_setup[12 + index * 4] for index in range(module.GRID_SIZE)]
+        self.assertEqual(fader_colors, [3, 17, 0, 0, 0, 0, 0, 0])
+
+        colors = {message[2]: message[3] for message in midi_messages}
+        self.assertEqual(colors[module.BANK_LEFT_BUTTON], module.PALETTE_FUNCTION)
+        self.assertEqual(colors[module.BANK_RIGHT_BUTTON], module.PALETTE_OFF)
+        self.assertEqual(
+            [colors[module.TRACK_SELECT_FIRST_CC + index] for index in range(module.GRID_SIZE)],
+            [1, 17, 0, 0, 0, 0, 0, 0],
+        )
+
+    def test_volume_fader_colors_show_mixer_track_states(self):
+        module, _, mixer, _, _ = load_script()
+        mixer.setTrackNumber(1)
+        mixer.armTrack(2)
+        mixer.muteTrack(3)
+        mixer.armTrack(4)
+        mixer.muteTrack(4)
+
+        colors = module.Controller.volume_fader_colors()
+
+        self.assertEqual(colors, [17, 61, 1, 1, 3, 3, 3, 3])
+
+    def test_volume_refresh_updates_colors_without_redefining_fader_bank(self):
+        module, _, _, sysex_messages, midi_messages = load_script()
+        module.Controller.enter_session()
+        module.Controller.set_mixer_control_mode('volume')
+        sysex_messages.clear()
+        midi_messages.clear()
+
+        module.Controller.on_refresh(0)
+
+        self.assertEqual(sysex_messages, [])
+        color_messages = [
+            message for message in midi_messages
+            if message[1] == module.FADER_COLOR_MIDI_CHANNEL
+        ]
+        self.assertEqual(len(color_messages), module.GRID_SIZE)
+
+    def test_track_select_chooses_visible_volume_bank(self):
+        module, _, _, _, _ = load_script()
+        module.Controller.enter_session()
+        module.Controller.set_mixer_control_mode('volume')
+
+        module.Controller.on_midi_msg(
+            Event(data1=module.TRACK_SELECT_FIRST_CC + 3, data2=127)
+        )
+
+        self.assertEqual(module.Controller.volume_bank_start, 25)
+
+    def test_leaving_volume_clears_track_select_leds(self):
+        module, _, _, _, midi_messages = load_script()
+        module.Controller.enter_session()
+        module.Controller.set_mixer_control_mode('volume')
+        midi_messages.clear()
+
+        module.Controller.set_mixer_control_mode('solo')
+
+        colors = {message[2]: message[3] for message in midi_messages}
+        self.assertEqual(
+            [colors[module.TRACK_SELECT_FIRST_CC + index] for index in range(module.GRID_SIZE)],
+            [0] * module.GRID_SIZE,
+        )
+
+    def test_volume_bank_indicator_pages_after_track_64(self):
+        module, _, _, _, midi_messages = load_script()
+        module.Controller.enter_session()
+        module.Controller.set_mixer_control_mode('volume')
+        module.Controller.volume_bank_start = 65
+        midi_messages.clear()
+
+        module.Controller.send_volume_bank_leds()
+
+        colors = {message[2]: message[3] for message in midi_messages}
+        self.assertEqual(colors[module.TRACK_SELECT_FIRST_CC], 17)
+        self.assertEqual(colors[module.TRACK_SELECT_FIRST_CC + 7], 1)
 
     def test_pressing_active_palette_button_returns_to_mixer_grid(self):
         module, _, _, sysex_messages, _ = load_script()

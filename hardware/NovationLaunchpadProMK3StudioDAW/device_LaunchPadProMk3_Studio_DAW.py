@@ -23,6 +23,7 @@ VOLUME_BUTTON = 4
 STOP_CLIP_BUTTON = 8
 BANK_LEFT_BUTTON = 91
 BANK_RIGHT_BUTTON = 92
+TRACK_SELECT_FIRST_CC = 101
 FADER_FIRST_CC = 21
 PALETTE_LOW_BUTTON = 29
 PALETTE_HIGH_BUTTON = 19
@@ -31,12 +32,14 @@ LAYOUT_SESSION = 0
 LAYOUT_CHORD = 2
 LAYOUT_CUSTOM = 3
 LAYOUT_NOTE = 4
+LAYOUT_SETTINGS = 18
 
 SYSEX_DAW_MODE_ON = bytes([0xF0, 0x00, 0x20, 0x29, 0x02, 0x0E, 0x10, 0x01, 0xF7])
 SYSEX_DAW_MODE_OFF = bytes([0xF0, 0x00, 0x20, 0x29, 0x02, 0x0E, 0x10, 0x00, 0xF7])
 SYSEX_FADER_LAYOUT = bytes([0xF0, 0x00, 0x20, 0x29, 0x02, 0x0E,
                             0x00, 0x01, 0x00, 0x00, 0xF7])
 FADER_MIDI_CHANNEL = 4
+FADER_COLOR_MIDI_CHANNEL = 5
 
 PALETTE_OFF = 0
 PALETTE_FUNCTION = 2
@@ -46,12 +49,16 @@ PALETTE_PLAY_LIGHT = 21
 PALETTE_PLAY_DARK = 22
 PALETTE_RECORD_LIGHT = 5
 PALETTE_RECORD_DARK = 6
-PALETTE_PAD_PRESSED = 3
+PALETTE_TRACK_SELECTED = 17
 PALETTE_RECORD_ARM_ACTIVE = 13
 PALETTE_TRACK_ARMED = 6
 PALETTE_TRACK_MUTED = 45
 PALETTE_TRACK_SOLO = 13
-PALETTE_FADER = 45
+PALETTE_FADER_DEFAULT = 3
+PALETTE_FADER_ARMED = 61
+PALETTE_FADER_MUTED = 1
+PALETTE_VOLUME_BANK = 1
+PALETTE_VOLUME_BANK_ACTIVE = 17
 LED_CHANNEL_STATIC = 0
 LED_CHANNEL_FLASH = 1
 MOMENTARY_HOLD_SECONDS = 0.35
@@ -86,10 +93,10 @@ def build_layout_sysex(layout, page=0):
     return bytes([0xF0, 0x00, 0x20, 0x29, 0x02, 0x0E, 0x00, layout, page, 0x00, 0xF7])
 
 
-def build_volume_faders(color):
+def build_volume_faders(colors):
     message = bytearray([0xF0, 0x00, 0x20, 0x29, 0x02, 0x0E, 0x01, 0, 0])
     for index in range(GRID_SIZE):
-        message.extend([index, 0, FADER_FIRST_CC + index, color])
+        message.extend([index, 0, FADER_FIRST_CC + index, colors[index]])
     message.append(0xF7)
     return bytes(message)
 
@@ -126,6 +133,14 @@ class StudioController:
             SOLO_BUTTON: (PALETTE_RECORD_ARM_ACTIVE if self.solo_active else PALETTE_FUNCTION, LED_CHANNEL_STATIC),
             VOLUME_BUTTON: (PALETTE_RECORD_ARM_ACTIVE if self.volume_active else PALETTE_FUNCTION, LED_CHANNEL_STATIC),
             STOP_CLIP_BUTTON: (PALETTE_STOP, LED_CHANNEL_STATIC),
+            BANK_LEFT_BUTTON: (
+                PALETTE_FUNCTION if self.volume_active and self.volume_bank_start > FIRST_MIXER_TRACK else PALETTE_OFF,
+                LED_CHANNEL_STATIC,
+            ),
+            BANK_RIGHT_BUTTON: (
+                PALETTE_FUNCTION if self.volume_active and self.volume_bank_start < self.max_volume_bank_start() else PALETTE_OFF,
+                LED_CHANNEL_STATIC,
+            ),
             7: (PALETTE_OFF, LED_CHANNEL_STATIC),  # Device has no function in the transport MVP.
             PALETTE_LOW_BUTTON: (PALETTE_ACTIVE if self.palette_page == 0 else PALETTE_FUNCTION, LED_CHANNEL_STATIC),
             PALETTE_HIGH_BUTTON: (PALETTE_ACTIVE if self.palette_page == 1 else PALETTE_FUNCTION, LED_CHANNEL_STATIC),
@@ -154,6 +169,11 @@ class StudioController:
         for control in (RECORD_ARM_BUTTON, MUTE_BUTTON, SOLO_BUTTON, VOLUME_BUTTON):
             device.midiOutMsg(midi.MIDI_CONTROLCHANGE, LED_CHANNEL_STATIC,
                               control, PALETTE_OFF)
+
+    def clear_track_select_leds(self):
+        for index in range(GRID_SIZE):
+            device.midiOutMsg(midi.MIDI_CONTROLCHANGE, LED_CHANNEL_STATIC,
+                              TRACK_SELECT_FIRST_CC + index, PALETTE_OFF)
 
     def send_mixer_grid(self):
         if not self.session_active or self.palette_page is not None or not device.isAssigned():
@@ -188,7 +208,7 @@ class StudioController:
             selected_track = mixer.trackNumber()
             selected_note = self.note_for_track(selected_track)
             if selected_note is not None:
-                device.midiOutMsg(midi.MIDI_NOTEON, 0, selected_note, PALETTE_PAD_PRESSED)
+                device.midiOutMsg(midi.MIDI_NOTEON, 0, selected_note, PALETTE_TRACK_SELECTED)
 
     @staticmethod
     def note_for_track(track):
@@ -228,6 +248,7 @@ class StudioController:
             self.send_volume_view()
         else:
             if was_volume_active and device.isAssigned():
+                self.clear_track_select_leds()
                 device.midiOutSysex(build_layout_sysex(LAYOUT_SESSION))
             self.send_mixer_grid()
         self.send_leds()
@@ -257,9 +278,57 @@ class StudioController:
         if not self.session_active or not self.volume_active or not device.isAssigned():
             return
         device.midiOutSysex(SYSEX_DAW_MODE_ON)
-        device.midiOutSysex(build_volume_faders(PALETTE_FADER))
+        self.send_volume_fader_setup()
         device.midiOutSysex(SYSEX_FADER_LAYOUT)
         self.send_volume_values()
+        self.send_volume_bank_leds()
+        self.send_leds()
+
+    def volume_fader_colors(self):
+        track_count = mixer.getTrackCount()
+        selected_track = mixer.trackNumber()
+        colors = []
+        for index in range(GRID_SIZE):
+            track = self.volume_bank_start + index
+            if track > track_count:
+                color = PALETTE_OFF
+            elif track == selected_track:
+                color = PALETTE_TRACK_SELECTED
+            elif mixer.isTrackMuted(track):
+                color = PALETTE_FADER_MUTED
+            elif mixer.isTrackArmed(track):
+                color = PALETTE_FADER_ARMED
+            else:
+                color = PALETTE_FADER_DEFAULT
+            colors.append(color)
+        return colors
+
+    def send_volume_fader_setup(self):
+        device.midiOutSysex(build_volume_faders(self.volume_fader_colors()))
+
+    def send_volume_fader_colors(self):
+        for index, color in enumerate(self.volume_fader_colors()):
+            device.midiOutMsg(midi.MIDI_CONTROLCHANGE, FADER_COLOR_MIDI_CHANNEL,
+                              FADER_FIRST_CC + index, color)
+
+    def max_volume_bank_start(self):
+        return max(FIRST_MIXER_TRACK,
+                   ((mixer.getTrackCount() - FIRST_MIXER_TRACK) // GRID_SIZE) * GRID_SIZE
+                   + FIRST_MIXER_TRACK)
+
+    def send_volume_bank_leds(self):
+        if not self.volume_active or not device.isAssigned():
+            return
+        current_bank = (self.volume_bank_start - FIRST_MIXER_TRACK) // GRID_SIZE
+        window_start = (current_bank // GRID_SIZE) * GRID_SIZE
+        bank_count = (mixer.getTrackCount() + GRID_SIZE - 1) // GRID_SIZE
+        for index in range(GRID_SIZE):
+            bank = window_start + index
+            color = PALETTE_OFF
+            if bank < bank_count:
+                color = PALETTE_VOLUME_BANK_ACTIVE if bank == current_bank else PALETTE_VOLUME_BANK
+            device.midiOutMsg(midi.MIDI_CONTROLCHANGE, LED_CHANNEL_STATIC,
+                              TRACK_SELECT_FIRST_CC + index, color)
 
     def send_volume_values(self):
         track_count = mixer.getTrackCount()
@@ -270,9 +339,19 @@ class StudioController:
                               FADER_FIRST_CC + index, value)
 
     def change_volume_bank(self, direction):
-        max_start = max(1, ((mixer.getTrackCount() - 1) // GRID_SIZE) * GRID_SIZE + 1)
-        self.volume_bank_start = min(max(self.volume_bank_start + direction * GRID_SIZE, 1), max_start)
-        self.send_volume_values()
+        self.volume_bank_start = min(
+            max(self.volume_bank_start + direction * GRID_SIZE, FIRST_MIXER_TRACK),
+            self.max_volume_bank_start(),
+        )
+        self.send_volume_view()
+
+    def select_visible_volume_bank(self, index):
+        current_bank = (self.volume_bank_start - FIRST_MIXER_TRACK) // GRID_SIZE
+        window_start = (current_bank // GRID_SIZE) * GRID_SIZE
+        target_start = FIRST_MIXER_TRACK + (window_start + index) * GRID_SIZE
+        if target_start <= self.max_volume_bank_start():
+            self.volume_bank_start = target_start
+            self.send_volume_view()
 
     def handle_fader_value(self, fader_index, value):
         if not self.volume_active or not 0 <= fader_index < GRID_SIZE:
@@ -293,6 +372,7 @@ class StudioController:
         self.mode_press_time = None
         if device.isAssigned():
             device.midiOutSysex(SYSEX_DAW_MODE_ON)
+            self.clear_track_select_leds()
             if select_layout:
                 device.midiOutSysex(build_layout_sysex(LAYOUT_SESSION))
             self.send_mixer_grid()
@@ -306,6 +386,7 @@ class StudioController:
             return
         if device.isAssigned():
             self.clear_mixer_mode_leds()
+            self.clear_track_select_leds()
         self.session_active = False
         self.palette_page = None
         self.record_arm_active = False
@@ -339,7 +420,15 @@ class StudioController:
             and list(event.sysex[:7]) == [0xF0, 0x00, 0x20, 0x29, 0x02, 0x0E, 0x00]
         ):
             layout = event.sysex[7]
-            if layout == LAYOUT_SESSION:
+            if layout == LAYOUT_SETTINGS:
+                pass  # Setup is temporary; preserve the active Session mixer view.
+            elif layout == 1 and self.session_active and self.volume_active:
+                device.midiOutSysex(SYSEX_DAW_MODE_ON)
+                self.send_volume_fader_setup()
+                self.send_volume_values()
+                self.send_volume_bank_leds()
+                self.send_leds()
+            elif layout == LAYOUT_SESSION:
                 if not self.session_active:
                     self.enter_session(force=True, select_layout=False)
                 else:
@@ -353,6 +442,7 @@ class StudioController:
                 self.volume_active = False
                 if device.isAssigned():
                     self.clear_mixer_mode_leds()
+                    self.clear_track_select_leds()
             event.handled = True
             return
         event.handled = False
@@ -376,6 +466,11 @@ class StudioController:
             event.handled = True
             if event.data2 > 0:
                 self.change_volume_bank(-1 if event.data1 == BANK_LEFT_BUTTON else 1)
+            return
+        if self.volume_active and TRACK_SELECT_FIRST_CC <= event.data1 < TRACK_SELECT_FIRST_CC + GRID_SIZE:
+            event.handled = True
+            if event.data2 > 0:
+                self.select_visible_volume_bank(event.data1 - TRACK_SELECT_FIRST_CC)
             return
 
         if event.data1 == PLAY_BUTTON:
@@ -448,7 +543,7 @@ class StudioController:
                     if previous_note is not None and previous_track != track:
                         self.restore_mixer_pad(previous_note, previous_track)
                     mixer.setTrackNumber(track)
-                    device.midiOutMsg(midi.MIDI_NOTEON, 0, event.data1, PALETTE_PAD_PRESSED)
+                    device.midiOutMsg(midi.MIDI_NOTEON, 0, event.data1, PALETTE_TRACK_SELECTED)
                 return
 
         exit_layouts = {
@@ -468,17 +563,21 @@ class StudioController:
         self.session_active = False
         if device.isAssigned():
             self.clear_mixer_mode_leds()
+            self.clear_track_select_leds()
             device.midiOutSysex(SYSEX_DAW_MODE_ON)
 
     def on_deinit(self):
         self.session_active = False
         if device.isAssigned():
             self.clear_mixer_mode_leds()
+            self.clear_track_select_leds()
             device.midiOutSysex(SYSEX_DAW_MODE_OFF)
 
     def on_refresh(self, flags):
         if self.volume_active:
+            self.send_volume_fader_colors()
             self.send_volume_values()
+            self.send_volume_bank_leds()
         else:
             self.send_mixer_grid()
         self.send_leds()

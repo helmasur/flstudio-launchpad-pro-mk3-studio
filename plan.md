@@ -104,5 +104,6 @@ Status: Verifierad
 - [x] Hantera fader-CC direkt i DAW-scriptet mot FL:s Mixer-API.
 - [x] Hantera befintliga kontroller och deras LED-feedback direkt i DAW-scriptets Volume-vy.
 - [x] Återställ alltid mixergrundvyn vid Session och rensa kvarvarande Volume-LED vid utgång.
+- [x] Begränsa Volume-faders till existerande spår och visa banknavigation med pilar och Track Select.
 - [x] Eliminera den cirkulära scriptbryggan genom att flytta hela Session-kontrollern till DAW-porten.
 - [x] Testa, installera och hårdvaruverifiera.
