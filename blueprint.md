@@ -37,6 +37,9 @@ Session Mode är FL Studios kontrollager. DAW-scriptet använder Launchpadens do
 - Track Select används som gruppval och gruppindikering i Volume-vyn; Mixer tracks väljs i 8×8-grundvyn.
 - Track Select CC 101–108 släcks i alla andra vyer än Volume.
 - Setup-layouten behandlas som tillfällig; aktiv Session-mixervy bevaras och återställs när hårdvaran återgår.
+- Shift + Record Arm utför Undo och Shift + Mute utför Redo i Session-vyer; respektive åtgärdsknapp visar vit 3 i minst 100 ms.
+- Shift + Solo (Click) växlar FL Studios metronom och använder samma tidsstyrda vita feedback.
+- Fixed Length på CC 30 växlar Pattern/Song och visar aktuell FL-status med 61 för Pattern och 17 för Song.
 - Volume uppdaterar faderfärger via DAW-kanal 6; faderbanken definieras endast när vyn öppnas eller banken byts.
 - Övriga märkta funktioner får endast en FL-funktion när motsvarigheten är tillräckligt nära och säker.
 

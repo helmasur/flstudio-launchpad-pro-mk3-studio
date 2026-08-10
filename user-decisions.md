@@ -55,3 +55,6 @@
 - 2026-08-08: Track Select CC 101–108 skall endast vara tända i Volume-vyn.
 - 2026-08-08: Ett tillfälligt besök i Launchpadens Setup-vy skall bevara aktiv Session-mixervy och återställa dess DAW-kontroller automatiskt vid återgång.
 - 2026-08-08: Löpande färgfeedback i Volume skall använda DAW-faderfärgkanalen utan att återdefiniera faderbanken under en fadergest.
+- 2026-08-10: Shift + Record Arm skall utföra Undo och Shift + Mute skall utföra Redo i Session-vyer. Åtgärdsknappen skall lysa vitt 3 i minst 100 ms.
+- 2026-08-10: Shift + Solo, märkt Click, skall växla FL Studios metronom på/av och använda samma vita 3-feedback i minst 100 ms.
+- 2026-08-10: Fixed Length på CC 30 skall växla mellan FL Studios Pattern- och Song-läge; Pattern skall visas med 61 och Song med 17.

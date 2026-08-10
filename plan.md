@@ -107,3 +107,16 @@ Status: Verifierad
 - [x] Begränsa Volume-faders till existerande spår och visa banknavigation med pilar och Track Select.
 - [x] Eliminera den cirkulära scriptbryggan genom att flytta hela Session-kontrollern till DAW-porten.
 - [x] Testa, installera och hårdvaruverifiera.
+
+#### Jobbpass: Undo och Redo
+Status: Implementerad
+
+##### Steg
+
+- [x] Implementera Shift-status för Session-vyer.
+- [x] Koppla Shift + Record Arm till Undo och Shift + Mute till Redo.
+- [x] Visa vit knappfeedback under åtgärdsknappens tryckning.
+- [x] Säkerställ minst 100 ms synlig feedback oberoende av knapptryckets längd.
+- [x] Koppla Shift + Solo (Click) till FL Studios metronom med samma feedback.
+- [x] Koppla Fixed Length till Pattern/Song med statusfärg 61/17.
+- [x] Testa och installera.

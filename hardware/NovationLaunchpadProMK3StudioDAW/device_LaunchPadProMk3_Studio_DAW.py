@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 import device
+import general
 import midi
 import mixer
 import time
@@ -15,12 +16,14 @@ NOTE_BUTTON = 94
 CHORD_BUTTON = 95
 CUSTOM_BUTTON = 96
 PLAY_BUTTON = 20
+FIXED_LENGTH_BUTTON = 30
 RECORD_BUTTON = 10
 RECORD_ARM_BUTTON = 1
 MUTE_BUTTON = 2
 SOLO_BUTTON = 3
 VOLUME_BUTTON = 4
 STOP_CLIP_BUTTON = 8
+SHIFT_BUTTON = 90
 BANK_LEFT_BUTTON = 91
 BANK_RIGHT_BUTTON = 92
 TRACK_SELECT_FIRST_CC = 101
@@ -49,6 +52,9 @@ PALETTE_PLAY_LIGHT = 21
 PALETTE_PLAY_DARK = 22
 PALETTE_RECORD_LIGHT = 5
 PALETTE_RECORD_DARK = 6
+PALETTE_PATTERN_MODE = 61
+PALETTE_SONG_MODE = 17
+PALETTE_SHIFT_ACTION = 3
 PALETTE_TRACK_SELECTED = 17
 PALETTE_RECORD_ARM_ACTIVE = 13
 PALETTE_TRACK_ARMED = 6
@@ -62,6 +68,7 @@ PALETTE_VOLUME_BANK_ACTIVE = 17
 LED_CHANNEL_STATIC = 0
 LED_CHANNEL_FLASH = 1
 MOMENTARY_HOLD_SECONDS = 0.35
+SHIFT_FEEDBACK_SECONDS = 0.1
 
 GRID_SIZE = 8
 FIRST_MIXER_TRACK = 1
@@ -114,6 +121,10 @@ class StudioController:
         self.volume_bank_start = FIRST_MIXER_TRACK
         self.mode_press_time = None
         self.mode_was_active = False
+        self.shift_active = False
+        self.shift_action_buttons = set()
+        self.shift_feedback_button = None
+        self.shift_feedback_until = 0.0
 
     def send_leds(self):
         if not self.session_active or not device.isAssigned():
@@ -121,6 +132,7 @@ class StudioController:
 
         play_color = PALETTE_PLAY_LIGHT if transport.isPlaying() == midi.PM_Playing else PALETTE_PLAY_DARK
         record_color = PALETTE_RECORD_LIGHT if transport.isRecording() else PALETTE_RECORD_DARK
+        loop_mode_color = PALETTE_SONG_MODE if transport.getLoopMode() == 1 else PALETTE_PATTERN_MODE
         colors = {
             SESSION_BUTTON: (PALETTE_ACTIVE, LED_CHANNEL_STATIC),
             NOTE_BUTTON: (PALETTE_FUNCTION, LED_CHANNEL_STATIC),
@@ -128,6 +140,7 @@ class StudioController:
             CUSTOM_BUTTON: (PALETTE_FUNCTION, LED_CHANNEL_STATIC),
             PLAY_BUTTON: (play_color, LED_CHANNEL_FLASH if transport.isPlaying() == midi.PM_Playing else LED_CHANNEL_STATIC),
             RECORD_BUTTON: (record_color, LED_CHANNEL_FLASH if transport.isRecording() else LED_CHANNEL_STATIC),
+            FIXED_LENGTH_BUTTON: (loop_mode_color, LED_CHANNEL_STATIC),
             RECORD_ARM_BUTTON: (PALETTE_RECORD_ARM_ACTIVE if self.record_arm_active else PALETTE_FUNCTION, LED_CHANNEL_STATIC),
             MUTE_BUTTON: (PALETTE_RECORD_ARM_ACTIVE if self.mute_active else PALETTE_FUNCTION, LED_CHANNEL_STATIC),
             SOLO_BUTTON: (PALETTE_RECORD_ARM_ACTIVE if self.solo_active else PALETTE_FUNCTION, LED_CHANNEL_STATIC),
@@ -145,6 +158,11 @@ class StudioController:
             PALETTE_LOW_BUTTON: (PALETTE_ACTIVE if self.palette_page == 0 else PALETTE_FUNCTION, LED_CHANNEL_STATIC),
             PALETTE_HIGH_BUTTON: (PALETTE_ACTIVE if self.palette_page == 1 else PALETTE_FUNCTION, LED_CHANNEL_STATIC),
         }
+        if (
+            self.shift_feedback_button is not None
+            and time.monotonic() < self.shift_feedback_until
+        ):
+            colors[self.shift_feedback_button] = (PALETTE_SHIFT_ACTION, LED_CHANNEL_STATIC)
         for led_index, (palette_color, midi_channel) in colors.items():
             if midi_channel == LED_CHANNEL_FLASH:
                 device.midiOutMsg(midi.MIDI_CONTROLCHANGE, LED_CHANNEL_STATIC,
@@ -274,6 +292,35 @@ class StudioController:
         if current_state != target_state:
             self.set_mixer_control_mode(mode if target_state else None)
 
+    def handle_shift_action(self, event):
+        if event.data2 > 0:
+            self.shift_action_buttons.add(event.data1)
+            if event.data1 == RECORD_ARM_BUTTON:
+                general.undoUp()
+            elif event.data1 == MUTE_BUTTON:
+                general.undoDown()
+            else:
+                transport.globalTransport(
+                    midi.FPT_Metronome,
+                    2,
+                    getattr(event, 'pmeFlags', getattr(midi, 'PME_System', 0)),
+                )
+            self.shift_feedback_button = event.data1
+            self.shift_feedback_until = time.monotonic() + SHIFT_FEEDBACK_SECONDS
+            device.midiOutMsg(midi.MIDI_CONTROLCHANGE, LED_CHANNEL_STATIC,
+                              event.data1, PALETTE_SHIFT_ACTION)
+        else:
+            self.shift_action_buttons.discard(event.data1)
+            self.send_leds()
+
+    def on_idle(self):
+        if (
+            self.shift_feedback_button is not None
+            and time.monotonic() >= self.shift_feedback_until
+        ):
+            self.shift_feedback_button = None
+            self.send_leds()
+
     def send_volume_view(self):
         if not self.session_active or not self.volume_active or not device.isAssigned():
             return
@@ -370,6 +417,9 @@ class StudioController:
         self.solo_active = False
         self.volume_active = False
         self.mode_press_time = None
+        self.shift_active = False
+        self.shift_action_buttons.clear()
+        self.shift_feedback_button = None
         if device.isAssigned():
             device.midiOutSysex(SYSEX_DAW_MODE_ON)
             self.clear_track_select_leds()
@@ -394,6 +444,9 @@ class StudioController:
         self.solo_active = False
         self.volume_active = False
         self.mode_press_time = None
+        self.shift_active = False
+        self.shift_action_buttons.clear()
+        self.shift_feedback_button = None
         if device.isAssigned():
             device.midiOutSysex(SYSEX_DAW_MODE_ON)
             device.midiOutSysex(build_layout_sysex(self.last_layout, self.last_layout_page))
@@ -440,6 +493,9 @@ class StudioController:
                 self.mute_active = False
                 self.solo_active = False
                 self.volume_active = False
+                self.shift_active = False
+                self.shift_action_buttons.clear()
+                self.shift_feedback_button = None
                 if device.isAssigned():
                     self.clear_mixer_mode_leds()
                     self.clear_track_select_leds()
@@ -456,6 +512,19 @@ class StudioController:
 
         if not self.session_active:
             event.handled = False
+            return
+
+        if event.data1 == SHIFT_BUTTON:
+            event.handled = True
+            self.shift_active = event.data2 > 0
+            return
+
+        if (
+            event.data1 in (RECORD_ARM_BUTTON, MUTE_BUTTON, SOLO_BUTTON)
+            and (self.shift_active or event.data1 in self.shift_action_buttons)
+        ):
+            event.handled = True
+            self.handle_shift_action(event)
             return
 
         if self.volume_active and FADER_FIRST_CC <= event.data1 < FADER_FIRST_CC + GRID_SIZE:
@@ -484,6 +553,12 @@ class StudioController:
         if event.data1 == STOP_CLIP_BUTTON:
             event.handled = True
             self.send_transport_command(midi.FPT_Stop, event)
+            return
+        if event.data1 == FIXED_LENGTH_BUTTON:
+            event.handled = True
+            if event.data2 > 0:
+                transport.setLoopMode()
+                self.send_leds()
             return
         if event.data1 == RECORD_ARM_BUTTON:
             event.handled = True
@@ -561,6 +636,9 @@ class StudioController:
 
     def on_init(self):
         self.session_active = False
+        self.shift_active = False
+        self.shift_action_buttons.clear()
+        self.shift_feedback_button = None
         if device.isAssigned():
             self.clear_mixer_mode_leds()
             self.clear_track_select_leds()
@@ -568,6 +646,9 @@ class StudioController:
 
     def on_deinit(self):
         self.session_active = False
+        self.shift_active = False
+        self.shift_action_buttons.clear()
+        self.shift_feedback_button = None
         if device.isAssigned():
             self.clear_mixer_mode_leds()
             self.clear_track_select_leds()
@@ -604,6 +685,10 @@ def OnMidiMsg(event):
 
 def OnUpdateBeatIndicator(value):
     Controller.send_leds()
+
+
+def OnIdle():
+    Controller.on_idle()
 
 
 def OnRefresh(flags):

@@ -31,6 +31,7 @@ class FakeTransport:
         self.start_calls = 0
         self.stop_calls = 0
         self.global_calls = []
+        self.loop_mode = 0
 
     def isPlaying(self):
         return 1 if self.playing else 0
@@ -55,6 +56,12 @@ class FakeTransport:
         elif command == 12 and value > 0:
             self.recording = not self.recording
 
+    def getLoopMode(self):
+        return self.loop_mode
+
+    def setLoopMode(self):
+        self.loop_mode = 1 - self.loop_mode
+
 
 def load_script():
     sysex_messages = []
@@ -70,12 +77,19 @@ def load_script():
         FPT_Play=10,
         FPT_Stop=11,
         FPT_Record=12,
+        FPT_Metronome=110,
         MIDI_NOTEON=0x90,
         MIDI_NOTEOFF=0x80,
         MIDI_CONTROLCHANGE=0xB0,
         MIDI_BEGINSYSEX=0xF0,
     )
     transport = FakeTransport()
+    general = types.SimpleNamespace(
+        undo_up_calls=[],
+        undo_down_calls=[],
+    )
+    general.undoUp = lambda: general.undo_up_calls.append(True)
+    general.undoDown = lambda: general.undo_down_calls.append(True)
     mixer_state = {"selected": 1}
     armed_tracks = set()
     muted_tracks = set()
@@ -104,6 +118,7 @@ def load_script():
     clock = types.SimpleNamespace(monotonic=lambda: 0.0)
     replacements = {
         "device": device,
+        "general": general,
         "midi": midi,
         "mixer": mixer,
         "transport": transport,
@@ -126,6 +141,86 @@ def load_script():
 
 
 class StudioTransportTests(unittest.TestCase):
+    def test_shift_arm_undoes_and_flashes_white_without_opening_arm(self):
+        module, _, _, _, midi_messages = load_script()
+        module.Controller.enter_session()
+        midi_messages.clear()
+
+        module.Controller.on_midi_msg(Event(data1=module.SHIFT_BUTTON, data2=127))
+        module.Controller.on_midi_msg(Event(data1=module.RECORD_ARM_BUTTON, data2=127))
+
+        self.assertEqual(module.general.undo_up_calls, [True])
+        self.assertFalse(module.Controller.record_arm_active)
+        self.assertEqual(
+            midi_messages[-1],
+            (module.midi.MIDI_CONTROLCHANGE, 0, module.RECORD_ARM_BUTTON, 3),
+        )
+
+        module.Controller.on_midi_msg(Event(data1=module.SHIFT_BUTTON, data2=0))
+        module.Controller.on_midi_msg(Event(data1=module.RECORD_ARM_BUTTON, data2=0))
+        self.assertFalse(module.Controller.record_arm_active)
+        self.assertEqual(midi_messages[-1][2:4], (module.PALETTE_HIGH_BUTTON, 2))
+
+    def test_shift_mute_redoes_and_flashes_white_without_opening_mute(self):
+        module, _, _, _, midi_messages = load_script()
+        module.Controller.enter_session()
+        midi_messages.clear()
+
+        module.Controller.on_midi_msg(Event(data1=module.SHIFT_BUTTON, data2=127))
+        module.Controller.on_midi_msg(Event(data1=module.MUTE_BUTTON, data2=127))
+
+        self.assertEqual(module.general.undo_down_calls, [True])
+        self.assertFalse(module.Controller.mute_active)
+        self.assertEqual(
+            midi_messages[-1],
+            (module.midi.MIDI_CONTROLCHANGE, 0, module.MUTE_BUTTON, 3),
+        )
+
+    def test_shift_action_feedback_remains_white_for_100_ms(self):
+        module, _, _, _, midi_messages = load_script()
+        now = [1.0]
+        module.time.monotonic = lambda: now[0]
+        module.Controller.enter_session()
+        module.Controller.on_midi_msg(Event(data1=module.SHIFT_BUTTON, data2=127))
+        module.Controller.on_midi_msg(Event(data1=module.RECORD_ARM_BUTTON, data2=127))
+        module.Controller.on_midi_msg(Event(data1=module.RECORD_ARM_BUTTON, data2=0))
+
+        arm_colors = [message[3] for message in midi_messages if message[2] == module.RECORD_ARM_BUTTON]
+        self.assertEqual(arm_colors[-1], 3)
+
+        now[0] = 1.09
+        module.Controller.on_idle()
+        self.assertEqual(module.Controller.shift_feedback_button, module.RECORD_ARM_BUTTON)
+
+        now[0] = 1.1
+        module.Controller.on_idle()
+        arm_colors = [message[3] for message in midi_messages if message[2] == module.RECORD_ARM_BUTTON]
+        self.assertIsNone(module.Controller.shift_feedback_button)
+        self.assertEqual(arm_colors[-1], module.PALETTE_FUNCTION)
+
+    def test_shift_solo_toggles_metronome_and_flashes_white(self):
+        module, transport, _, _, midi_messages = load_script()
+        module.Controller.enter_session()
+        midi_messages.clear()
+
+        module.Controller.on_midi_msg(Event(data1=module.SHIFT_BUTTON, data2=127))
+        module.Controller.on_midi_msg(
+            Event(data1=module.SOLO_BUTTON, data2=127, pme_flags=29)
+        )
+
+        self.assertEqual(transport.global_calls[-1], (module.midi.FPT_Metronome, 2, 29))
+        self.assertFalse(module.Controller.solo_active)
+        self.assertEqual(
+            midi_messages[-1],
+            (module.midi.MIDI_CONTROLCHANGE, 0, module.SOLO_BUTTON, 3),
+        )
+
+        module.Controller.on_midi_msg(Event(data1=module.SOLO_BUTTON, data2=0))
+        self.assertEqual(
+            [call for call in transport.global_calls if call[0] == module.midi.FPT_Metronome],
+            [(module.midi.FPT_Metronome, 2, 29)],
+        )
+
     def test_session_button_always_enters_base_session_view(self):
         module, _, _, _, _ = load_script()
         event = Event(data1=module.SESSION_BUTTON, data2=127)
@@ -252,6 +347,27 @@ class StudioTransportTests(unittest.TestCase):
         self.assertTrue(event.handled)
         self.assertFalse(transport.playing)
         self.assertEqual(transport.global_calls[-1], (module.midi.FPT_Stop, 2, 0))
+
+    def test_fixed_length_toggles_pattern_song_and_updates_color(self):
+        module, transport, _, _, midi_messages = load_script()
+        module.Controller.enter_session()
+        initial_colors = {message[2]: message[3] for message in midi_messages}
+        self.assertEqual(initial_colors[module.FIXED_LENGTH_BUTTON], 61)
+
+        midi_messages.clear()
+        press = Event(data1=module.FIXED_LENGTH_BUTTON, data2=127)
+        module.Controller.on_midi_msg(press)
+
+        self.assertTrue(press.handled)
+        self.assertEqual(transport.getLoopMode(), 1)
+        song_colors = {message[2]: message[3] for message in midi_messages}
+        self.assertEqual(song_colors[module.FIXED_LENGTH_BUTTON], 17)
+
+        module.Controller.on_midi_msg(Event(data1=module.FIXED_LENGTH_BUTTON, data2=0))
+        self.assertEqual(transport.getLoopMode(), 1)
+
+        module.Controller.on_midi_msg(Event(data1=module.FIXED_LENGTH_BUTTON, data2=127))
+        self.assertEqual(transport.getLoopMode(), 0)
 
     def test_transport_release_is_forwarded_as_button_release(self):
         module, transport, _, _, _ = load_script()
